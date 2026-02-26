@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Nutri Manager v1.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { 
+            --primary: #34a853; /* Verde per nutrizione */
+            --bg: #f8f9fa; 
+            --card: #ffffff; 
+            --text: #1f1f1f; 
+            --shadow: 0 4px 15px rgba(0,0,0,0.05);
+            --kcal: #fbbc04; --prot: #4285f4; --carb: #34a853; --grass: #ea4335;
+        }
+        body { font-family: sans-serif; margin: 0; padding-bottom: 90px; background: var(--bg); color: var(--text); }
+        header { padding: 20px; background: white; display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); }
+        .page { display: none; padding: 15px; }
+        .page.active { display: block; }
+        .card { background: var(--card); border-radius: 20px; padding: 18px; margin-bottom: 20px; box-shadow: var(--shadow); }
+        
+        /* Dashboard Macros */
+        .dash { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #1f1f1f; color: white; padding: 15px; border-radius: 20px; text-align: center; margin-bottom: 20px; }
+        .dash div span { display: block; font-size: 10px; text-transform: uppercase; margin-bottom: 5px; }
+        .dash div b { font-size: 16px; }
+
+        /* Calendar */
+        .calendar-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .day-box { background: white; border-radius: 15px; padding: 12px; box-shadow: var(--shadow); border: 2px solid transparent; }
+        .day-box.today { border-color: var(--primary); }
+        .day-title { font-size: 12px; font-weight: bold; margin-bottom: 8px; color: #5f6368; }
+
+        input, select { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #eee; border-radius: 12px; box-sizing: border-box; }
+        .btn-main { background: var(--primary); color: white; border: none; width: 100%; padding: 15px; border-radius: 12px; font-weight: bold; cursor: pointer; }
+        
+        .tab-bar { position: fixed; bottom: 0; width: 100%; background: white; display: flex; border-top: 1px solid #eee; }
+        .tab-btn { flex: 1; padding: 20px; border: none; background: none; color: #80868b; font-weight: bold; font-size: 12px; }
+        .tab-btn.active { color: var(--primary); }
+    </style>
+</head>
+<body>
+
+<div id="app-content">
+    <header>
+        <h1 style="font-size:18px; color:var(--primary); margin:0;">NUTRI MANAGER</h1>
+        <button onclick="location.reload()" style="background:none; border:none; color:gray;">F5</button>
+    </header>
+
+    <div id="home" class="page active">
+        <div class="dash">
+            <div><span style="color:var(--kcal)">Kcal</span><b id="t-cal">0</b></div>
+            <div><span style="color:var(--prot)">Prot</span><b id="t-p">0g</b></div>
+            <div><span style="color:var(--carb)">Carb</span><b id="t-c">0g</b></div>
+            <div><span style="color:var(--grass)">Grass</span><b id="t-g">0g</b></div>
+        </div>
+        <div class="calendar-grid" id="settimana"></div>
+    </div>
+
+    <div id="ricette" class="page">
+        <h3>📖 Aggiungi Piatto</h3>
+        <div class="card">
+            <input type="text" id="rNome" placeholder="Nome Ricetta">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <input type="number" id="rCal" placeholder="Kcal">
+                <input type="number" id="rProt" placeholder="Proteine (g)">
+                <input type="number" id="rCarb" placeholder="Carbo (g)">
+                <input type="number" id="rGrass" placeholder="Grassi (g)">
+            </div>
+            <button class="btn-main" onclick="salvaRicetta()">SALVA NEI PIATTI</button>
+        </div>
+        <div id="elencoRicette"></div>
+    </div>
+
+    <nav class="tab-bar">
+        <button class="tab-btn active" onclick="cambiaPagina('home', this)">DIARIO</button>
+        <button class="tab-btn" onclick="cambiaPagina('ricette', this)">PIATTI</button>
+    </nav>
+</div>
+
+<script>
+    const SB_URL = "https://cpvtgadcyjpsvseflwdi.supabase.co";
+    const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNwdnRnYWRjeWpwc3ZzZWZsd2RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3Njc3NDAsImV4cCI6MjA4NzM0Mzc0MH0._oU5ucMpMc3Yku4ADpDQgRHuljVMX-Bs_ulyYA3mvKI";
+    const _supabase = supabase.createClient(SB_URL, SB_KEY);
+
+    let dbData = { ricette: [], piano: {} };
+
+    async function fetchData() {
+        const { data } = await _supabase.from('nutri_data').select('*');
+        if (data) data.forEach(r => { dbData[r.data_type] = r.content; });
+        render();
+    }
+
+    async function sync(t) {
+        await _supabase.from('nutri_data').upsert({ data_type: t, content: dbData[t] }, { onConflict: 'data_type' });
+        render();
+    }
+
+    function salvaRicetta() {
+        const n = document.getElementById('rNome').value.trim();
+        const r = {
+            nome: n,
+            cal: parseInt(document.getElementById('rCal').value) || 0,
+            p: parseInt(document.getElementById('rProt').value) || 0,
+            c: parseInt(document.getElementById('rCarb').value) || 0,
+            g: parseInt(document.getElementById('rGrass').value) || 0
+        };
+        if(!n) return;
+        dbData.ricette.push(r);
+        sync('ricette');
+        document.querySelectorAll('#ricette input').forEach(i => i.value = "");
+    }
+
+    function render() {
+        const gs = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+        let f = new Date().getDate() - (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1);
+        let hS = ""; 
+        let tot = { cal: 0, p: 0, c: 0, g: 0 };
+
+        for(let i=0; i<7; i++) {
+            let d = new Date(new Date().setDate(f+i));
+            let s = d.toDateString();
+            
+            // Calcolo macro totali per la dashboard
+            ['_p', '_c'].forEach(tipo => {
+                let r = dbData.ricette.find(x => x.nome === dbData.piano[s+tipo]);
+                if(r) { tot.cal += r.cal; tot.p += r.p; tot.c += r.c; tot.g += r.g; }
+            });
+
+            hS += `<div class="day-box ${new Date().toDateString() === s ? 'today' : ''}">
+                <div class="day-title">${gs[i]} ${d.getDate()}</div>
+                <select onchange="dbData.piano['${s}_p']=this.value;sync('piano')" style="font-size:11px; padding:5px;">
+                    <option value="">Pranzo</option>
+                    ${dbData.ricette.map(r => `<option value="${r.nome}" ${dbData.piano[s+'_p']===r.nome?'selected':''}>${r.nome}</option>`).join('')}
+                </select>
+                <select onchange="dbData.piano['${s}_c']=this.value;sync('piano')" style="font-size:11px; padding:5px;">
+                    <option value="">Cena</option>
+                    ${dbData.ricette.map(r => `<option value="${r.nome}" ${dbData.piano[s+'_c']===r.nome?'selected':''}>${r.nome}</option>`).join('')}
+                </select>
+            </div>`;
+        }
+
+        document.getElementById('settimana').innerHTML = hS;
+        document.getElementById('t-cal').innerText = tot.cal;
+        document.getElementById('t-p').innerText = tot.p + "g";
+        document.getElementById('t-c').innerText = tot.c + "g";
+        document.getElementById('t-g').innerText = tot.g + "g";
+
+        document.getElementById('elencoRicette').innerHTML = dbData.ricette.map((r, i) => `
+            <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between;">
+                <span><b>${r.nome}</b><br><small>${r.cal} kcal | P:${r.p} C:${r.c} G:${r.g}</small></span>
+                <button onclick="dbData.ricette.splice(${i},1);sync('ricette')" style="color:red; background:none; border:none;">✕</button>
+            </div>`).join('');
+    }
+
+    function cambiaPagina(id, btn) {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(id).classList.add('active'); btn.classList.add('active');
+    }
+
+    fetchData();
+</script>
+</body>
+</html>
